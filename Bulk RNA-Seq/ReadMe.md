@@ -18,7 +18,7 @@ samtools: Provides utilities for manipulating and analyzing BAM files produced d
 
 subread: Offers tools for read counting and other sequence processing tasks.
 
-r-base (version 4.3.1): A programming language and environment for statistical computing and visualization.
+r-base (version 4.4.0): A programming language and environment for statistical computing and visualization.
 
 bioconductor-deseq2: An R package for differential gene expression analysis using count data.
 
