@@ -1,0 +1,166 @@
+# Section 1: Create and Activate Conda Environment
+# Create a new Conda environment for RNA-seq analysis
+conda create -n <env_name> -y  # Replace <env_name> with your desired environment name
+# Activate the environment
+conda activate <env_name>
+# Install necessary tools and libraries
+conda install -y \
+  fastqc \
+  multiqc \
+  trim-galore \
+  star \
+  samtools \
+  subread \
+  r-base=4.3.1 \
+  bioconductor-deseq2
+# Save the environment configuration for reproducibility
+conda env export > environment.yml
+
+# Section 2: Download Data
+# Create a file named urls.txt with your data download URLs, one per line
+# Example content for urls.txt:
+# https://example.com/sample1_1.fastq.gz
+# https://example.com/sample1_2.fastq.gz
+# ...
+
+# Create a download script to handle URLs with parameters and special characters
+cat > download.sh << EOL
+#!/bin/bash
+while read -r url; do
+    # Extract filename from URL, removing query parameters
+    filename=\$(echo "\$url" | awk -F/ '{gsub(/\?.*/,"",\$NF); print \$NF}')
+    # Decode percent-encoded characters (e.g., for special filenames)
+    decoded_name=\$(python3 -c "import sys, urllib.parse as ul; print(ul.unquote(sys.argv[1]))" "\$filename")
+    # Encode special characters in the URL for wget compatibility
+    encoded_url=\$(echo "\$url" | sed 's/ /%20/g; s/\[/%5B/g; s/\]/%5D/g; s/{/%7B/g; s/}/%7D/g; s/|/%7C/g')
+    # Download the file with progress bar and resume capability
+    wget -c -O "\$decoded_name" "\$encoded_url" --progress=bar:force 2>&1
+    # Check if download was successful
+    if [ \$? -eq 0 ]; then
+        echo "✅ Successfully downloaded: \$decoded_name"
+    else
+        echo "❌ Download failed: \$url"
+    fi
+done < urls.txt
+echo "All files downloaded!"
+EOL
+
+# Make the download script executable and run it
+chmod +x download.sh
+./download.sh
+
+# Section 3: Organize Files
+# Create generic directories for different conditions and batches
+mkdir -p condition1/{batch1,batch2,batch3}
+mkdir -p condition2/{batch1,batch2,batch3}
+# Move files to appropriate directories (adapt based on your file naming)
+# Example:
+# mv sample1_* condition1/batch1/
+# mv sample2_* condition2/batch1/
+# ...
+
+# Section 4: Quality Control with FastQC
+# Create directory for raw data quality control reports
+mkdir -p qc_reports/raw
+# Run FastQC on all paired-end fastq files (assumes files are named *_1.fq.gz and *_2.fq.gz)
+find . -name "*_1.fq.gz" -type f | while read r1; do
+  r2=\$(echo "\$r1" | sed 's/_1.fq.gz/_2.fq.gz/')
+  if [ -e "\$r2" ]; then
+    fastqc -o qc_reports/raw/ "\$r1" "\$r2" -t 8  # Use 8 threads for faster processing
+  fi
+done
+# Generate MultiQC report for raw data
+multiqc qc_reports/raw/ -o qc_reports/
+
+# Section 5: Trim Reads with Trim Galore
+# Create directory for trimmed data
+mkdir trimmed_data
+# Run Trim Galore on all paired-end fastq files
+find . -name "*_1.fq.gz" -type f | while read r1; do
+  r2=\$(echo "\$r1" | sed 's/_1.fq.gz/_2.fq.gz/')
+  if [ -e "\$r2" ]; then
+    trim_galore \
+      --paired \
+      --quality 20 \
+      --phred33 \
+      --length 20 \
+      --output_dir trimmed_data \
+      --cores 8 \
+      "\$r1" "\$r2"
+  fi
+done
+# Run FastQC on trimmed data
+mkdir -p qc_reports/trimmed
+find trimmed_data -name "*_1_val_1.fq.gz" -type f | while read r1_trimmed; do
+  r2_trimmed=\$(echo "\$r1_trimmed" | sed 's/_1_val_1.fq.gz/_2_val_2.fq.gz/')
+  if [ -e "\$r2_trimmed" ]; then
+    fastqc -o qc_reports/trimmed/ "\$r1_trimmed" "\$r2_trimmed"
+  fi
+done
+# Generate MultiQC report for trimmed data
+multiqc qc_reports/trimmed/ -o qc_reports/
+
+# Section 6: Align Reads with STAR
+# Create directories for reference files
+mkdir -p reference/{genome,annotation,star_index}
+# Download reference genome and annotation files (replace with your preferred sources)
+# Example:
+# wget -P reference/genome/ <your_genome_url>
+# gunzip reference/genome/<genome_file>.gz
+# wget -P reference/annotation/ <your_annotation_url>
+# gunzip reference/annotation/<annotation_file>.gz
+
+# Build STAR index (ensure you have the genome and annotation files ready)
+STAR --runThreadN 8 --runMode genomeGenerate \
+  --genomeDir reference/star_index \
+  --genomeFastaFiles reference/genome/<genome_file> \
+  --sjdbGTFfile reference/annotation/<annotation_file> \
+  --sjdbOverhang 149  # Adjust based on your read length (typically read length - 1)
+
+# Create directory for aligned data
+mkdir aligned_data
+# Align reads using STAR (assumes trimmed files are in trimmed_data/)
+for r1 in trimmed_data/*_1_val_1.fq.gz; do
+  r2=\${r1/_1_val_1/_2_val_2}  # Adjust if your file naming differs
+  sample=\$(basename \$r1 _1_val_1.fq.gz)
+  STAR --runThreadN 8 \
+       --genomeDir reference/star_index \
+       --readFilesIn \$r1 \$r2 \
+       --readFilesCommand zcat \
+       --outFileNamePrefix aligned_data/\${sample}_ \
+       --outSAMtype BAM SortedByCoordinate \
+       --quantMode GeneCounts \
+       --outFilterMultimapNmax 20 \
+       --alignSJoverhangMin 8
+done
+# Rename output BAM files for simplicity
+for bam in aligned_data/*_Aligned.sortedByCoord.out.bam; do
+  new_name=\$(echo "\$bam" | sed 's/_Aligned.sortedByCoord.out//')
+  mv "\$bam" "\$new_name"
+done
+
+# Section 7: Expression Quantification
+# Create directory for gene counts
+mkdir counts
+# Merge gene counts from all samples
+samples=()
+for file in aligned_data/*ReadsPerGene.out.tab; do
+  sample=\$(basename "\$file" _ReadsPerGene.out.tab)
+  samples+=("\$sample")
+done
+# Combine counts, skipping the first 4 lines of summary statistics
+paste aligned_data/*ReadsPerGene.out.tab | awk -v samples="\${samples[*]}" '
+BEGIN {
+  split(samples, arr, " ");
+  num_samples = length(arr);
+  OFS="\t";
+  printf "GeneID";
+  for (i=1; i<=num_samples; i++) printf "%s%s", OFS, arr[i];
+  printf "\n";
+}
+NR > 4 {
+  printf "%s", \$1;
+  for (i=2; i <= 2 + 4*(num_samples-1); i += 4) printf "\t%s", \$i;
+  printf "\n";
+}' > counts/gene_counts.txt
+echo "Merged counts saved to counts/gene_counts.txt"
