@@ -3727,7 +3727,7 @@ scatter3d(pca_scores$PC1, pca_scores$PC2, pca_scores$PC3, col = pca_scores$group
     
     
     
-####宽数据转为长数据#####
+####宽数据转为长数据####
 #加载包  
   library(tidyr)
 #读取宽数据
@@ -3746,7 +3746,7 @@ scatter3d(pca_scores$PC1, pca_scores$PC2, pca_scores$PC3, col = pca_scores$group
   
   
   
-#####分组箱线图####
+####分组箱线图####（已优化）
 #加载包
   library(ggplot2)
   library(dplyr)
@@ -3793,19 +3793,15 @@ scatter3d(pca_scores$PC1, pca_scores$PC2, pca_scores$PC3, col = pca_scores$group
     guides(color = guide_colorbar(title.position = "top", title.hjust = 0.5, barwidth = 20))
 #组合图形
   p_combined <- p.top + p.bottom + plot_layout(ncol = 1, heights = c(1, 5))
-#展示图片
-  p_combined
-  
-  
-  
-  
-  
-  
-####绘制细胞系基因表达雷达图####
+
+
+
+
+####绘制细胞系基因表达雷达图####（已优化）
 #加载包
   library(ggplot2)
   library(tidyverse)
-#读取数据
+#读取数据<-数据源于HPA数据库，请自行下载
   dt <- read.csv("Cellline.csv")
 #添加Id
   dt$id <- 1:nrow(dt)
