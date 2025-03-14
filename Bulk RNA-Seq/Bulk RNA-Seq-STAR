@@ -164,3 +164,4 @@ NR > 4 {
   printf "\n";
 }' > counts/gene_counts.txt
 echo "Merged counts saved to counts/gene_counts.txt"
+
